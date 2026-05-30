@@ -111,10 +111,6 @@ jobs:
           ref: ${{ inputs.whisper_ref }}
 
       - name: Install Vulkan SDK
-        # 1.3.296.0+ bundles SPIRV-Headers — required by ggml-vulkan's
-        # find_package(SPIRV-Headers). `stripdown` removes those CMake config
-        # files, so keep the full install. Runtime install isn't needed for a
-        # headless build.
         uses: jakoch/install-vulkan-sdk-action@v1
         with:
           vulkan_version: 1.3.296.0
@@ -122,18 +118,28 @@ jobs:
           cache: true
           stripdown: false
 
-      - name: Configure
-        # Point CMake at the SDK's CMake config tree so find_package(SPIRV-Headers)
-        # resolves to %VULKAN_SDK%\share\cmake\SPIRV-Headers (set by the SDK installer).
+      - name: Install SPIRV-Headers
+        # jakoch's SDK install layout doesn't include SPIRV-HeadersConfig.cmake
+        # where CMake's find_package looks, so install the headers from source
+        # into a local prefix. Header-only library — installs in seconds.
         shell: pwsh
         run: |
-          $env:CMAKE_PREFIX_PATH = "$env:VULKAN_SDK;$env:CMAKE_PREFIX_PATH"
+          git clone --depth 1 --branch vulkan-sdk-1.3.296.0 https://github.com/KhronosGroup/SPIRV-Headers.git spirv-headers
+          cd spirv-headers
+          cmake -B build -DCMAKE_INSTALL_PREFIX="$env:GITHUB_WORKSPACE/spirv-install"
+          cmake --build build --target install --config Release
+          # Sanity-check the CMake config file we'll be searching for.
+          Get-ChildItem -Recurse "$env:GITHUB_WORKSPACE/spirv-install" -Filter '*.cmake' | Select-Object FullName
+
+      - name: Configure
+        shell: pwsh
+        run: |
           cmake -B build -A x64 `
             -DCMAKE_BUILD_TYPE=Release `
             -DGGML_VULKAN=ON `
             -DWHISPER_SDL2=OFF `
             -DBUILD_SHARED_LIBS=ON `
-            -DCMAKE_PREFIX_PATH="$env:VULKAN_SDK"
+            -DCMAKE_PREFIX_PATH="$env:VULKAN_SDK;$env:GITHUB_WORKSPACE/spirv-install"
 
       - name: Build whisper-cli
         shell: pwsh
